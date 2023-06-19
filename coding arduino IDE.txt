@@ -1,0 +1,176 @@
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <PubSubClient.h>
+#include "DHTesp.h"
+#include <string>
+#include <ArduinoJson.h>
+
+#define MAX_CHARACTER 50
+#define MQTT_SERVER "0.tcp.ap.ngrok.io"
+
+// deklarasi pin-pin sensor
+#define PIN_DHT 14
+#define PIN_LDR 35
+//#define PIN_MOISTURE 15
+
+// LED
+#define LEDt 19 // Suhu
+#define LEDmoist 22 // Moisture
+
+// Batas LED Menyala
+int batasLDR = 2400; // Batas ADC Value
+int batast = 30; // Batas suhu
+int batasmoist = 80; // Batas Moisture
+
+char ssid[] = "Wokwi-GUEST";
+char pass[] = "";
+
+char mqtt_topic[] = "/FarmTech";
+int mqtt_port = 13472;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// inisialisasi object library
+DHTesp dht;
+
+// inisialisasi variable
+String ket_kipas;
+String ket_keran;
+//int moisture = 0;
+int ldr = 0;
+int temp = 0;
+int hum = 0;
+
+void setupWifi(){
+  Serial.print("Menghubungkan ke ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, pass);
+
+  while (WiFi.status() != WL_CONNECTED){
+    delay(5000);
+    Serial.print(".");
+  }
+
+  randomSeed(micros());
+
+  Serial.println("");
+  Serial.print("Terhubung ke ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("");
+}
+
+void setupMqtt(){
+  while (!client.connected()){
+    Serial.println("Menghubungkan ke MQTT...");
+
+    String idClient = "client-";
+    idClient += String(random(0xffff), HEX);
+
+    if (client.connect(idClient.c_str())){
+      Serial.println("MQTT terhubung");
+      Serial.println();
+
+      client.publish(mqtt_topic, "Perangkat terhubung...");
+      client.publish(mqtt_topic, " ");
+    }
+    else{
+      Serial.print("Error: ");
+      Serial.print(client.state());
+      Serial.println("Mencoba lagi...");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  setupWifi();
+  client.setServer(MQTT_SERVER, mqtt_port);
+
+  if (!client.connected()){
+    setupMqtt();
+  }
+
+  // inisiasi pin sensor
+  // inisiasi LDR
+  pinMode(PIN_LDR, INPUT);
+  // inisiasi Moisture
+  //pinMode(PIN_MOISTURE, INPUT);
+  // inisiasi DHT
+  dht.setup(PIN_DHT, DHTesp::DHT22);
+
+  pinMode(LEDt, OUTPUT);
+  pinMode(LEDmoist, OUTPUT);
+
+  Serial.begin(9600);
+}
+
+void loop() {
+  client.loop();
+// LDR
+  ldr = analogRead(PIN_LDR);
+  // moisture
+  //moisture = analogRead(PIN_MOISTURE);
+  // DHT
+  TempAndHumidity data = dht.getTempAndHumidity();
+  // ekstrak data temperature
+  temp = data.temperature;
+  // ekstrak data humidity
+  hum = data.humidity;
+
+  // display data ke serial monitor
+  Serial.println("===================");
+  Serial.print("Moisture: ");
+  Serial.println(ldr);
+  Serial.print("Suhu: ");
+  Serial.println(temp);
+  Serial.print("Kelembaban: ");
+  Serial.println(hum);
+  //Serial.print("Moisture: ");
+  //Serial.println(moisture);
+  Serial.println("===================");
+
+  // LED Suhu
+  if(temp > batast){
+    digitalWrite(LEDt, HIGH);
+    Serial.println("Fan is activated");
+    ket_kipas = "ON";
+  }
+  else {
+    digitalWrite(LEDt, LOW);
+    Serial.println("Fan is deactivated");
+    ket_kipas = "OFF";
+  }
+  // LED Moisture
+  if(hum > batasmoist){
+    digitalWrite(LEDmoist, HIGH);
+    Serial.println("Drip irigation is activated");
+    ket_keran = "ON";
+  }
+  else {
+    digitalWrite(LEDmoist, LOW);
+    Serial.println("Drip irigation is deactivated");
+    ket_keran = "OFF";
+  }
+
+  StaticJsonDocument<200> doc;
+  doc["parameters"]["temp"] = temp;
+  doc["parameters"]["moisture"] = hum;
+  doc["status"]["kipas"] = ket_kipas;
+  doc["status"]["keran"] = ket_keran;
+
+  String message;
+  serializeJson(doc, message);
+
+  //client publish
+  client.publish(mqtt_topic, message.c_str());
+  client.publish(mqtt_topic, "---------------");
+  delay(3000);
+}
